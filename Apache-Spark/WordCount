@@ -2,12 +2,12 @@ val f = sc.textFile("sample.txt")
 // word count 
 val wc = f.flatMap(l => l.split(" ")).map(word => (word,1)).reduceByKey(_ + _)
 // swap k,v to v,k to sort by word frequency
-val wc_swap = wc.map(_.swap)
+val wc_swapkv = wc.map(_.swap)
 // sort keys by ascending=false (descending)
-val hifreq_words = wc_swap.sortByKey(false,1)
-hifreq_words.saveAsTextFile("hifreq_words")
+val sort_HightoLow = wc_swapkv.sortByKey(false,1)
+sort_HightoLow.collect().foreach(println)
 // get an array of top 20 frequent words
-val top20 = hifreq_words.take(20)
+val top20 = sort_HightoLow.take(20)
 // convert array to RDD
 val top20rdd = sc.parallelize(top20)
-top20rdd.saveAsTextFile("hifreq_top20")
+top20rdd.collect().foreach(println)
