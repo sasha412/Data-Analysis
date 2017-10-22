@@ -1,0 +1,16 @@
+val taxi = sc.textFile("/resources/LabData/nyctaxi.csv")
+taxi.take(5).foreach(println)
+
+#create a new RDD by splitting the lines of the RDD using the comma as the delimiter
+val taxiParse = taxi.map(line=>line.split(","))
+
+#create the key-value pairs where the key is the medallion number and the value is 1
+val taxiMedKey = taxiParse.map(vals=>(vals(6), 1))
+
+#use the reduceByKey function to count the number of occurrence for each key.
+val taxiMedCounts = taxiMedKey.reduceByKey((v1,v2)=>v1+v2)
+taxiMedCounts.take(5).foreach(println)
+for (pair <-taxiMedCounts.map(_.swap).top(10)) println("Taxi Medallion %s had %s Trips".format(pair._2, pair._1))
+
+#cache the taxiMedCountsOneLine
+taxiMedCountsOneLine.cache()
