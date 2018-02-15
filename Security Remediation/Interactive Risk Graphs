@@ -1,0 +1,898 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Web;
+using System.Web.UI;
+using System.Web.UI.WebControls;
+using System.Data;
+using System.Web.UI.DataVisualization.Charting;
+using System.Drawing;
+
+namespace securityremediation
+{
+    public partial class RiskValueGraphs : System.Web.UI.Page
+    {
+        DataTable dt = new DataTable();
+
+        /// <summary>
+        /// Method to make gridview accessible to use the jquery datatable plugin
+        /// </summary>
+        /// <param name="e"></param>
+        protected override void OnPreRender(EventArgs e)
+        {
+
+            base.OnPreRender(e);
+            CommonFunctions.MakeAccessible(grdLocationDistribution);
+            CommonFunctions.MakeAccessible(grdRiskAlertTable);
+
+        }
+
+        protected void Page_Load(object sender, EventArgs e)
+        {
+            CommonFunctions.runjQueryCode(Page, "$(\"select\").selectBoxIt();");
+            try
+            {
+                ScriptManager requestSM = ScriptManager.GetCurrent(Page);
+                requestSM.RegisterAsyncPostBackControl(Location);
+
+                if (!IsPostBack)
+                {
+                    vldRisk.Visible = false;
+                    populateGraph("Global", String.Empty, string.Empty);
+                    getAlertGraphs(dt, "Global", String.Empty, string.Empty);
+                    Location.LoadLocationDropDown(true, ClsDBFunctions.GetDataSource(),string.Empty,string.Empty,string.Empty);
+                    LoadAlertDropDown();
+
+                }
+            }
+            catch (Exception ex)
+            {
+                CommonFunctions.AddValidationError("Exception occurred while loading 2 months KC Global graph: " + ex.ToString(), Page);
+                vldRisk.Visible = true;
+                updVal.Update();
+            }
+        }
+
+        /// <summary>
+        /// get location type
+        /// </summary>
+        /// <param name="Region">regoin</param>
+        /// <param name="Country">country</param>
+        /// <param name="Site">site</param>
+        /// <returns>location type</returns>
+        public string getLocationType(string Region,string Country, string Site)
+        {
+            return !string.IsNullOrEmpty(Region) ? (!string.IsNullOrEmpty(Country) ? (!string.IsNullOrEmpty(Site) ? "Site" : "Country") : "Region") : "Global";
+        }
+
+        /// <summary>
+        /// returns location name
+        /// </summary>
+        /// <param name="Region">regoin</param>
+        /// <param name="Country">country</param>
+        /// <param name="Site">site</param>
+        /// <returns>location name</returns>
+        public string GetLocation(string Region, string Country, string Site)
+        {
+            return !string.IsNullOrEmpty(Region) ? (!string.IsNullOrEmpty(Country) ? (!string.IsNullOrEmpty(Site) ? Site : Country) : Region) : string.Empty;
+        }
+
+        /// <summary>
+        /// populate names of alert ids
+        /// </summary>
+        public void LoadAlertDropDown()
+        {
+            string sSQL = "select Name, AlertTypeID from dsralertTypes order by alerttypeid";
+            drpAlerts.DataSource = ClsDBFunctions.GetDetailsFromDB(CommandType.Text, sSQL, null, ClsDBFunctions.GetDataSource()).Tables[0];
+            drpAlerts.DataTextField = "Name";
+            drpAlerts.DataValueField = "AlertTypeID";
+            drpAlerts.DataBind();
+            drpAlerts.Items.Insert(0, String.Empty);
+        }
+
+
+
+        /// <summary>
+        /// Populate 1 month  global risk value graph and present distribution graph by location.
+        /// </summary>
+        public void populateGraph(string LocationType, string Location, string AlertID)
+        {
+            try
+            {
+                vldRisk.Visible = false;
+                showRiskByLocationGraph(LocationType, Location);
+                string sSQL = "select  AlertTypeID,Sum(TotalRiskVal) as Risk,Region,CONVERT(Date, DateTime) as Date from dsrRiskHistoryByAlertType where  Region = 'AsiaPacific'  group by AlertTypeID,Region,CONVERT(Date, DateTime) order by CONVERT(Date, DateTime)";
+                dt = ClsDBFunctions.GetDetailsFromDB(CommandType.Text, sSQL, null, ClsDBFunctions.GetDataSource()).Tables[0];
+                updGraphs.Update();
+                updVal.Update();
+
+
+            }
+            catch (Exception ex)
+            {
+                CommonFunctions.AddValidationError("Exception occurred while displaying the graphs: " + ex.ToString(), Page);
+                vldRisk.Visible = true;
+                updVal.Update();
+            }
+        }
+
+
+        /// <summary>
+        /// get location real name
+        /// </summary>
+        /// <param name="location">location</param>
+        /// <param name="locationType">location type</param>
+        /// <returns>string</returns>
+        public string getLocationRealName(string location, string locationType)
+        {
+
+            try
+            {
+                string siteName = string.Empty;
+                switch (locationType)
+                {
+                    case "Site":
+                        if(!location.Contains("."))
+                        {
+                            siteName = ClsDBFunctions.GetDetailsFromDB(CommandType.Text, String.Format("select name from dsrlocations where sitename='{0}'", location), null, ClsDBFunctions.GetDataSource()).Tables[0].Rows[0][0].ToString();
+                        }
+                        break;
+
+                    case "Country":
+                        siteName = location;
+                        break;
+
+                    case "Region":
+                        siteName = ClsDBFunctions.GetDetailsFromDB(CommandType.Text, String.Format("select Region from dsrlocations where ADRegion='{0}'", location), null, ClsDBFunctions.GetDataSource()).Tables[0].Rows[0][0].ToString();
+                        break;
+
+                }
+
+              
+                return siteName;
+            }
+            catch
+            {
+                return location;
+            }
+        }
+
+        /// <summary>
+        /// display 1 month risk graph and present risk distribution graph by location
+        /// </summary>
+        /// <param name="LocationType">location type</param>
+        /// <param name="Location">Location</param>
+        public void showRiskByLocationGraph(string LocationType, string Location)
+        {
+            string sSQL = string.Empty;
+            divTitle.Visible = true;
+            LocationType = String.IsNullOrEmpty(LocationType) ? "Global" : LocationType;
+            //set title   
+            divTitle.InnerText = LocationType == "Global" ? "K-C Global Risk" : getLocationRealName(Location, LocationType) + " Risk";
+
+            #region Risk By Location one month History graph
+           
+            // Location = CommonFunctions.GetADRegion(Location);
+            switch (LocationType)
+            {
+                // Date difference should be 1 month so thats why checking if the DateDiff() < 31 days.
+                //Get global risk value
+                case "Global":
+                    sSQL = String.Format(@"select RiskValue,Region as Location,Convert(Date,RiskDateTime) as Date from   
+(select SUM(RiskValue) as RiskValue, Region,RiskDateTime  from 
+dsrRiskHistory where DATEDIFF(Day,RiskDateTime,getdate())<31   
+group by RiskDateTime,Region) a 
+ORDER BY RiskValue desc,Convert(Date,RiskDateTime)  ");
+                    break;
+
+                //Get Region risk values
+                case "Region":
+                    sSQL = String.Format(@"select RiskValue,Country as Location,Convert(Date,RiskDateTime) as Date from    
+(select SUM(RiskValue) as RiskValue, Country,RiskDateTime  from 
+dsrRiskHistory where DATEDIFF(Day,RiskDateTime,getdate())<31   and ADRegion='{0}'
+group by RiskDateTime,Country) a 
+ORDER BY RiskValue desc,Convert(Date,RiskDateTime)  ", Location);
+                    //, !String.IsNullOrEmpty(Location.Administrative)? "and Administrative="+Location.Administrative:String.Empty
+                    break;
+
+                //get country risk values
+                case "Country":
+                    sSQL = String.Format(@"select RiskValue,Site as Location,Convert(Date,RiskDateTime) as Date from   
+(select SUM(RiskValue) as RiskValue, Site,RiskDateTime  from 
+dsrRiskHistory where DATEDIFF(Day,RiskDateTime,getdate())<31   and Country='{0}'
+group by RiskDateTime,Site) a 
+ORDER BY RiskValue desc,Convert(Date,RiskDateTime) ", Location);// show dropdown
+                    break;
+
+                //Not applicable
+                case "Site":
+                    sSQL = String.Format(@"", Location);
+
+                    //select RiskValue,Convert(Date,RiskDateTime) as Date from   
+                    //(select SUM(RiskValue) as RiskValue, RiskDateTime, Site  from 
+                    //dsrRiskHistory where Site = '{0}' and DATEDIFF(Day,RiskDateTime,getdate())<31 
+                    //group by RiskDateTime,Site ) a 
+                    //ORDER BY YEAR(RiskDateTime) , MONTH(RiskDateTime) ,Day(RiskDateTime) 
+
+                    break;
+                default: break;
+
+            }
+
+
+            /////////////////////////////////
+            string sSQLTop10 = string.Empty;
+            string seriesName = String.Empty;
+            string LegendName = string.Empty;
+            long OthersRiskValue = 0;
+            object Date = new object();
+            bool isOthersRequired = false;
+            //for query to get top 10 locations by risk
+            switch (LocationType)
+            {
+                    //Get regions
+                case "Global": sSQLTop10 = @"select top 10 Region as Location  from 
+                                            dsrRiskHistory where Convert(Date,RiskDateTime) = Convert(Date,getdate())   
+                                            group by Region
+                                            ORDER BY SUM(RiskValue) desc"; break;
+                    // Get Countrie
+                case "Region": sSQLTop10 = string.Format(@"select top 10 isnull(Country,Region) as Location  from 
+                                            dsrRiskHistory where Convert(Date,RiskDateTime) = Convert(Date,getdate())   and ADRegion = '{0}'
+                                            group by isnull(Country,Region),Region
+                                            ORDER BY SUM(RiskValue) desc
+                                            ", Location); break;
+                    //Get sites
+                case "Country": sSQLTop10 = string.Format(@"select top 10 Site as Location  from 
+                                            dsrRiskHistory where Convert(Date,RiskDateTime) = Convert(Date,getdate())   and Country = '{0}'
+                                            group by Site,Country,Region
+                                            ORDER BY SUM(RiskValue) desc", Location); break;
+                    //Get PCs
+                case "Site": 
+                    //For sites such as QAlab and ChennaiQAlab. Their OU paths are different than obvious.
+                    if(Location.Contains("."))
+                    {
+                        Location =  Location.Replace(".", ",OU="); ;
+                    }
+                    sSQLTop10 = @"select top 10  Name0 as Location
+                                            from 
+                                            USTCA026.cm_pr1.dbo.v_r_system system
+                                            cross apply (select SUM(t.RiskValue) as TotalRisk 
+                                               from dsrAlerts a join dsralerttypes t on a.AlertTypeId=t.AlertTypeId 
+                                               where a.resourceid = system.resourceid and a.ClosedOn is null) as [RiskValue]
+                                             where system.Distinguished_Name0 like '%OU=" + Location + ",%'  order by RiskValue.TotalRisk desc";
+                    break;
+            }
+
+
+            string DistributionSQL = string.Empty;
+            bool isSiteSelected = false;
+           //Get all locations of present day. 
+            switch (LocationType)
+            {
+                // Date difference should be 1 month so thats why checking if the DateDiff() < 31 days.
+                //Get global risk value
+                case "Global":
+                    DistributionSQL = String.Format(@"select RiskValue,Region as Location,Convert(Date,RiskDateTime) as Date from   
+                                        (select SUM(RiskValue) as RiskValue, Region,RiskDateTime  from 
+                                        dsrRiskHistory where Convert(Date,RiskDateTime) = Convert(Date,getdate()) 
+                                        group by RiskDateTime,Region) a 
+                                        ORDER BY RiskValue desc,Convert(Date,RiskDateTime)  ");
+                    break;
+
+                //Get Regions risk values
+                case "Region":
+                    DistributionSQL = String.Format(@"select RiskValue,Country as Location,Convert(Date,RiskDateTime) as Date from    
+                                        (select SUM(RiskValue) as RiskValue, isnull(Country,Region) as Country,RiskDateTime  from 
+                                        dsrRiskHistory where Convert(Date,RiskDateTime) = Convert(Date,getdate()) and ADRegion='{0}'
+                                        group by RiskDateTime,isnull(Country,Region)) a 
+                                        ORDER BY RiskValue desc,Convert(Date,RiskDateTime) ", Location);
+                    //, !String.IsNullOrEmpty(Location.Administrative)? "and Administrative="+Location.Administrative:String.Empty
+                    break;
+
+                //get country risk values
+                case "Country":
+                    DistributionSQL = String.Format(@"select RiskValue,Site as Location,Convert(Date,RiskDateTime) as Date from   
+                                        (select SUM(RiskValue) as RiskValue, Site,RiskDateTime  from 
+                                        dsrRiskHistory where Convert(Date,RiskDateTime) = Convert(Date,getdate()) and Country='{0}'
+                                        group by RiskDateTime,Site) a 
+                                        ORDER BY RiskValue desc,Convert(Date,RiskDateTime) ", Location);// show dropdown
+                    break;
+
+                //Get site risk values
+                case "Site":
+                    isSiteSelected=true;
+                    DistributionSQL = String.Format(@"select isnull(RiskValue.TotalRisk,0) as RiskValue, Name0 as Location
+                                            from 
+                                            USTCA026.cm_pr1.dbo.v_r_system system
+                                            cross apply (select SUM(t.RiskValue) as TotalRisk 
+                                            from dsrAlerts a join dsralerttypes t on a.AlertTypeId=t.AlertTypeId 
+                                            where a.resourceid = system.resourceid  and a.ClosedOn is null) as [RiskValue] where system.Distinguished_Name0 like '%OU={0},%'  order by RiskValue.TotalRisk desc", Location);
+
+                    break;
+                default: break;
+
+
+
+            }
+
+            //Contains all sub-locations and their risk based on location selection
+            DataTable dtDistribution = ClsDBFunctions.GetDetailsFromDB(CommandType.Text, DistributionSQL, null, ClsDBFunctions.GetDataSource()).Tables[0];
+
+            //Contains top 10 locations for present day.
+            DataTable dttop10Locations = (ClsDBFunctions.GetDetailsFromDB(CommandType.Text, sSQLTop10, null, ClsDBFunctions.GetDataSource()).Tables[0]);
+            //Contains total data of all sites. Mostly one months data 
+            DataTable dtTotalRows = new DataTable();
+            if (!string.IsNullOrEmpty(sSQL))
+            {
+                dtTotalRows = ClsDBFunctions.GetDetailsFromDB(CommandType.Text, sSQL, null, ClsDBFunctions.GetDataSource()).Tables[0];
+            }
+
+            if (dtTotalRows.Rows.Count > 0)
+            {
+                if (isExcludedLocations(Location))
+                //Get stacked area chart
+                SetMultipleStackedAreaChart(chtRiskValue, dtTotalRows, dtDistribution, dttop10Locations, isOthersRequired);
+                else
+                addAnnotation(chtRiskValue);
+            }
+            else
+            {
+                addAnnotation(chtRiskValue);
+            }
+            #endregion
+
+            #region Risk By Location Distribution graph
+
+
+
+
+            //Risk by Alert distribution
+            if (dtDistribution.Rows.Count > 0)
+            {
+                //Check if the max risk value of items is 0.
+                if (!dtDistribution.Compute("SUM(RiskValue)", "").ToString().Equals("0"))
+                {
+                    if (isExcludedLocations(Location))
+                    setDistributionCharts(dtDistribution, dttop10Locations, isOthersRequired, OthersRiskValue, chtPie);
+                    else
+                        addAnnotation(chtPie);
+                }
+                else
+                    addAnnotation(chtPie);
+            }
+            else
+            {
+                addAnnotation(chtPie);
+            }
+
+            #endregion
+
+            if (isSiteSelected && dtDistribution.Rows.Count > 0)
+            {
+                dtDistribution= dtDistribution.Rows.Cast<System.Data.DataRow>().Take(10).CopyToDataTable();
+            }
+
+            //Show table below pie chart
+            ShowRiskTable(dtDistribution, grdLocationDistribution);
+
+        }
+
+
+
+
+        /// <summary>
+        /// Risks By Location
+        /// </summary>
+        /// <param name="dtDistribution">this datatable contains present day risk data depending on the location selected.</param>
+        /// <param name="grdRiskData">Used to show the risk data.</param>
+        public void ShowRiskTable(DataTable dtDistribution, GridView grdRiskData)
+        {
+            double TotalRiskValue = 0;
+
+            foreach (DataRow dr in dtDistribution.Rows)
+            {
+                TotalRiskValue = TotalRiskValue + Convert.ToInt64(dr["RiskValue"]);
+            }
+
+
+            //Name, %, Risk Number
+            dtDistribution.Columns.Add("Percentage", typeof(float));
+
+            foreach (DataRow dr in dtDistribution.Rows)
+            {
+
+                dr["Percentage"] = Math.Round(((Convert.ToInt64(dr["RiskValue"]) / TotalRiskValue) * 100), 2);
+            }
+
+            grdRiskData.DataSource = dtDistribution;
+            grdRiskData.DataBind();
+
+        }
+
+
+    
+        /// <summary>
+        /// Get alert history Top 10 @Stacked area chart.
+        /// </summary>
+        /// <param name="dt">Contains all the Risk data from dsrRiskHistoryByAlertType table in database </param>
+        /// <param name="Location">Location selected</param>
+        /// <param name="AlertID">Alert ID</param>
+        /// <param name="LocationType">Location type selected</param>
+        public void getAlertGraphs(DataTable dt, string LocationType, string Location, string AlertID)
+        {
+
+            string sSQLTop10 = string.Empty;
+            string sSQL = string.Empty;
+            string DistributionSQL = string.Empty;
+            divAlertsTitle.Visible = true;
+            bool isSiteSelected = false;
+            LocationType = String.IsNullOrEmpty(LocationType) ? "Global" : LocationType;
+            //set title   
+            divAlertsTitle.InnerText = LocationType == "Global" ? "K-C Global Risk By Alerts" : getLocationRealName(Location, LocationType) + " Risk By Alerts";
+
+            #region prepare SQL queries
+
+            if (!string.IsNullOrEmpty(LocationType) && !string.IsNullOrEmpty(AlertID))
+            {
+
+                //Case 1: if Location selected & Alert selected
+                //Query to get top 10 Locations
+                switch (LocationType)
+                {
+                    case "Global": sSQLTop10 = "select top 10 Region as Location from dsrRiskHistoryByAlertType where AlertTypeID=" + AlertID + " and CONVERT(Date, DateTime)= CONVERT(Date, GETDATE()) and Region is not null group by Region,CONVERT(Date, DateTime) order by sum(totalriskval) desc "; break;
+                    case "Region": sSQLTop10 = "select top 10  Country as Location from dsrRiskHistoryByAlertType where AlertTypeID=" + AlertID + " and ADRegion = '" + Location + "' and CONVERT(Date, DateTime)= CONVERT(Date, GETDATE()) group by Country,Region,CONVERT(Date, DateTime) order by sum(totalriskval) desc "; break;
+                    case "Country": sSQLTop10 = "select top 10  Site  as Location from dsrRiskHistoryByAlertType where AlertTypeID=" + AlertID + " and Country = '" + Location + "' and CONVERT(Date, DateTime)= CONVERT(Date, GETDATE()) group by Site,country,Region,CONVERT(Date, DateTime) order by sum(totalriskval) desc   "; break;
+                    case "Site":
+                        if(Location.Contains("."))
+                        {
+                            Location = Location.Replace(".", ",OU=");
+                        }
+                        sSQLTop10 = @"select top 10 'Worskstation' as Workstation, Name0 as Location
+                                            from 
+                                            USTCA026.cm_pr1.dbo.v_r_system system
+                                            cross apply (select SUM(t.RiskValue) as TotalRisk 
+                                               from dsrAlerts a join dsralerttypes t on a.AlertTypeId=t.AlertTypeId 
+                                               where a.resourceid = system.resourceid and a.ClosedOn is null) as [RiskValue]
+                                             where system.Distinguished_Name0 like '%OU=" + Location + ",%'  order by RiskValue.TotalRisk desc";
+                        break;
+                }
+
+
+                //Query to get total risk by locations
+                switch (LocationType)
+                {
+                    case "Global": sSQL = "select SUM(totalriskval) as RiskValue,Region as Location,Convert(Date,DateTime) as Date  from dsrRiskHistoryByAlertType where AlertTypeid=" + AlertID + " and Region is not null group by DateTime,Region order by sum(totalriskval) desc , Convert(Date,DateTime) "; break;
+                    case "Region": sSQL = "select SUM(totalriskval) as RiskValue,Country as Location,Convert(Date,DateTime) as Date  from dsrRiskHistoryByAlertType where AlertTypeid=" + AlertID + " and ADRegion='" + Location + "' group by DateTime,Country,Region order by sum(totalriskval) desc , Convert(Date,DateTime) "; break;
+                    case "Country": sSQL = "select SUM(totalriskval) as RiskValue,Site as Location,Convert(Date,DateTime) as Date  from dsrRiskHistoryByAlertType where AlertTypeid=" + AlertID + " and Country='" + Location + "' group by DateTime,Site,Country,Region order by sum(totalriskval) desc , Convert(Date,DateTime)"; break;
+                    case "Site": sSQL = ""; break;
+
+
+                }
+
+                //Query to get current risk distribution for a Location. A location can be a Region, COuntry, and site.
+                switch (LocationType)
+                {
+                    case "Global": DistributionSQL = "select SUM(totalriskval) as RiskValue,Region as Location,Convert(Date,DateTime) as Date  from dsrRiskHistoryByAlertType where AlertTypeid=" + AlertID + " and Region is not null  and CONVERT(Date, DateTime)= CONVERT(Date, GETDATE()) group by DateTime,Region order by sum(totalriskval) desc , Convert(Date,DateTime) "; break;
+                    case "Region": DistributionSQL = "select SUM(totalriskval) as RiskValue,Country as Location,Convert(Date,DateTime) as Date  from dsrRiskHistoryByAlertType where AlertTypeid=" + AlertID + " and ADRegion='" + Location + "' and CONVERT(Date, DateTime)= CONVERT(Date, GETDATE()) group by DateTime,Country,Region order by sum(totalriskval) desc , Convert(Date,DateTime) "; break;
+                    case "Country": DistributionSQL = "select SUM(totalriskval) as RiskValue,Site as Location,Convert(Date,DateTime) as Date  from dsrRiskHistoryByAlertType where AlertTypeid=" + AlertID + " and Country='" + Location + "' and CONVERT(Date, DateTime)= CONVERT(Date, GETDATE()) group by DateTime,Site,Country,Region order by sum(totalriskval) desc , Convert(Date,DateTime)"; break;
+                    //For site get PCs.
+                    case "Site": 
+                        if(Location.Contains("."))
+                        {
+                            Location = Location.Split('.')[0];
+                        }
+                        isSiteSelected = true;
+                        DistributionSQL = @"select  isnull(RiskValue.TotalRisk,0) as RiskValue, Name0 as Location
+                                            from 
+                                            USTCA026.cm_pr1.dbo.v_r_system system
+                                            cross apply (select SUM(t.RiskValue) as TotalRisk 
+                                               from dsrAlerts a join dsralerttypes t on a.AlertTypeId=t.AlertTypeId 
+                                               where a.resourceid = system.resourceid and a.alertTypeid= " + AlertID + " and a.ClosedOn is null) as [RiskValue] where system.Distinguished_Name0 like '%OU=" + Location + ",%'  order by RiskValue.TotalRisk desc"; break;
+
+
+                }
+            }
+            //Case 2: Location selected & Alert not selected
+            else if (!string.IsNullOrEmpty(LocationType) && string.IsNullOrEmpty(AlertID))
+            {
+                sSQLTop10 = string.Empty;
+               
+                //Query to get top 10 Alerts
+                switch (LocationType)
+                {
+                    case "Global": sSQLTop10 = "select top 10 a.AlertTypeID ,Name as Location  from dsrRiskHistoryByAlertType a join dsrAlertTypes b on a.AlertTypeID=b.AlertTypeID where CONVERT(Date, DateTime)= CONVERT(Date, GETDATE()) group by a.AlertTypeID,Name,CONVERT(Date, DateTime) order by sum(totalriskval) desc   "; break;
+                    case "Region": sSQLTop10 = "select top 10  a.AlertTypeID ,Name as Location from dsrRiskHistoryByAlertType a join dsrAlertTypes b on a.AlertTypeID=b.AlertTypeID where  ADRegion = '" + Location + "' and CONVERT(Date, DateTime)= CONVERT(Date, GETDATE()) group by a.AlertTypeID,Name,Region,CONVERT(Date, DateTime) order by sum(totalriskval) desc   "; break;
+                    case "Country": sSQLTop10 = "select top 10  a.AlertTypeID,Name as Location from dsrRiskHistoryByAlertType a join dsrAlertTypes b on a.AlertTypeID=b.AlertTypeID where  Country = '" + Location + "' and CONVERT(Date, DateTime)= CONVERT(Date, GETDATE()) group by a.AlertTypeID,Name,Country,CONVERT(Date, DateTime) order by sum(totalriskval) desc   "; break;
+                    case "Site": sSQLTop10 = "select top 10  a.AlertTypeID,Name as Location from dsrRiskHistoryByAlertType a join dsrAlertTypes b on a.AlertTypeID=b.AlertTypeID where  ADSite = '" + Location + "' and CONVERT(Date, DateTime)= CONVERT(Date, GETDATE()) group by a.AlertTypeID,Name,SIte,CONVERT(Date, DateTime) order by sum(totalriskval) desc   "; break;
+                }
+
+                sSQL = string.Empty;
+
+                //Get all alert risk history data
+                switch (LocationType)
+                {
+                    case "Global": sSQL = "select SUM(totalriskval) as RiskValue,a.AlertTypeID ,Convert(Date,DateTime) as Date,b.Name as Location  from dsrRiskHistoryByAlertType a join dsralerttypes b on a.alerttypeid=b.alerttypeid group by DateTime,a.AlertTypeID,b.name order by sum(totalriskval) desc , Convert(Date,DateTime)   "; break;
+                    case "Region": sSQL = "select SUM(totalriskval) as RiskValue,a.AlertTypeID ,Convert(Date,DateTime) as Date,b.Name as Location  from dsrRiskHistoryByAlertType a join dsralerttypes b on a.alerttypeid=b.alerttypeid where  ADRegion = '" + Location + "' group by DateTime,a.AlertTypeID,b.name order by sum(totalriskval) desc , Convert(Date,DateTime)    "; break;
+                    case "Country": sSQL = "select SUM(totalriskval) as RiskValue,a.AlertTypeID ,Convert(Date,DateTime) as Date,b.Name as Location  from dsrRiskHistoryByAlertType a join dsralerttypes b on a.alerttypeid=b.alerttypeid where  Country = '" + Location + "' group by DateTime,a.AlertTypeID,b.name order by sum(totalriskval) desc , Convert(Date,DateTime)   "; break;
+                    case "Site": sSQL = "select SUM(totalriskval) as RiskValue,a.AlertTypeID ,Convert(Date,DateTime) as Date,b.Name as Location  from dsrRiskHistoryByAlertType a join dsralerttypes b on a.alerttypeid=b.alerttypeid where  ADSite = '" + Location + "' group by DateTime,a.AlertTypeID,b.name order by sum(totalriskval) desc , Convert(Date,DateTime) "; break;
+
+                }
+
+                // Query to get risk distribution data of alerts
+                switch (LocationType)
+                {
+                    case "Global": DistributionSQL = @"select SUM(totalriskval) as RiskValue,a.AlertTypeID,Convert(Date,DateTime) as Date, b.Name as Location  from dsrRiskHistoryByAlertType a
+                                                    join dsralerttypes b on a.alerttypeid=b.alerttypeid
+                                                     where  CONVERT(Date, DateTime)= CONVERT(Date, GETDATE()) group by DateTime,a.AlertTypeID,b.Name 
+                                                    order by sum(totalriskval) desc , Convert(Date,DateTime)   ";
+                        break;
+                    case "Region": DistributionSQL = @"select SUM(totalriskval) as RiskValue,a.AlertTypeID,Convert(Date,DateTime) as Date, b.Name as Location  from dsrRiskHistoryByAlertType a 
+                                                    join dsralerttypes b on a.alerttypeid=b.alerttypeid
+                                                    where  ADRegion = '" + Location + "' and CONVERT(Date, DateTime)= CONVERT(Date, GETDATE()) group by DateTime,a.AlertTypeID,b.Name  order by sum(totalriskval) desc , Convert(Date,DateTime)    "; break;
+                    case "Country": DistributionSQL = @"select SUM(totalriskval) as RiskValue,a.AlertTypeID,Convert(Date,DateTime) as Date, b.Name as Location  from dsrRiskHistoryByAlertType a
+                                                 join dsralerttypes b on a.alerttypeid=b.alerttypeid                       
+                                                where  Country = '" + Location + "' and CONVERT(Date, DateTime)= CONVERT(Date, GETDATE()) group by DateTime,a.AlertTypeID,b.Name  order by sum(totalriskval) desc , Convert(Date,DateTime)   "; break;
+                    case "Site":
+                        isSiteSelected = true;
+                        DistributionSQL = @"select SUM(totalriskval) as RiskValue,a.AlertTypeID,Convert(Date,DateTime) as Date, b.Name as Location  from dsrRiskHistoryByAlertType a
+                                                    join dsralerttypes b on a.alerttypeid=b.alerttypeid    
+                                                     where  ADSite = '" + Location + "' and CONVERT(Date, DateTime)= CONVERT(Date, GETDATE()) group by DateTime,a.AlertTypeID,b.Name  order by sum(totalriskval) desc , Convert(Date,DateTime) "; break;
+                }
+
+            }
+
+            #endregion
+
+            #region Risk History
+            string seriesName = String.Empty;
+            string LegendName = string.Empty;
+            //Contains total risk value of locations not in top 10.
+            long OthersRiskValue = 0;
+            object Date = new object();
+            bool isOthersRequired = false;
+
+            //Contains Risk data of top 10 Locations or alerts
+            DataTable dttop10Locations = (ClsDBFunctions.GetDetailsFromDB(CommandType.Text, sSQLTop10, null, ClsDBFunctions.GetDataSource()).Tables[0]);
+            //Total alert risk history
+            DataTable dtTotalRows = new DataTable();
+            if (!string.IsNullOrEmpty(sSQL))
+            {
+                dtTotalRows = ClsDBFunctions.GetDetailsFromDB(CommandType.Text, sSQL, null, ClsDBFunctions.GetDataSource()).Tables[0];
+            }
+
+            //Present day risk by alert distribution data.
+            DataTable dtDistribution = ClsDBFunctions.GetDetailsFromDB(CommandType.Text, DistributionSQL, null, ClsDBFunctions.GetDataSource()).Tables[0];
+
+            //Get Risk History
+            if (dtTotalRows.Rows.Count > 0)
+            {
+                if (isExcludedLocations(Location))
+                    SetMultipleStackedAreaChart(chtRiskByAlert, dtTotalRows, dtDistribution, dttop10Locations, isOthersRequired);
+                else
+                    addAnnotation(chtRiskByAlert);
+            }
+            else
+                addAnnotation(chtRiskByAlert);
+
+            #endregion
+
+            #region Risk Distribution
+
+
+            if (dtDistribution.Rows.Count > 0)
+            {
+                // Get Risk distribution
+                if (!dtDistribution.Compute("SUM(RiskValue)", "").ToString().Equals("0"))
+                {
+                    if (isExcludedLocations(Location))
+                        setDistributionCharts(dtDistribution, dttop10Locations, isOthersRequired, OthersRiskValue, chkRiskByAlertDistribution);
+                    else
+                        addAnnotation(chkRiskByAlertDistribution);
+                }
+                else
+                    addAnnotation(chkRiskByAlertDistribution);
+
+            }
+            else
+                addAnnotation(chkRiskByAlertDistribution);
+            #endregion
+
+         
+            if (isSiteSelected && dtDistribution.Rows.Count>0)
+            {
+                dtDistribution = dtDistribution.Rows.Cast<System.Data.DataRow>().Take(10).CopyToDataTable();
+            }
+
+            //Show risk distribution table 
+            ShowRiskTable(dtDistribution, grdRiskAlertTable);
+
+          
+        }
+
+
+        /// <summary>
+        /// On alert select.
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        protected void drpAlerts_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            string LocationType = getLocationType(Location.Region, Location.Country, Location.SiteName);
+            string location = GetLocation(Location.Region, Location.Country, Location.SiteName);
+            if (Location.Region.Equals("Global"))
+            {
+                getAlertGraphs(dt, "Global", string.Empty, drpAlerts.SelectedValue);                
+            }
+            else
+            {
+                getAlertGraphs(dt, string.IsNullOrEmpty(LocationType) ? "Global" : LocationType, location, drpAlerts.SelectedValue);
+               
+            }
+           
+            CommonFunctions.runjQueryCode(Page, String.Format("styleGrid('{0}')", grdRiskAlertTable.ClientID, grdLocationDistribution.ClientID));
+            updAlertsGraphs.Update();
+        }
+
+
+        /// <summary>
+        ///  show distribution charts: Risk By Location and Risk By Alert.
+        /// </summary>
+        /// <param name="dtDistribution">this datatable contains present day risk data depending on the location or alert selected.</param>
+        /// <param name="dttop10Locations">Contains Risk data of top 10 slices.</param>
+        /// <param name="isOthersRequired">Condition to know whether Others slice is required or not.</param>
+        /// <param name="OthersRiskValue">Total risk value of the locations that fall in Others slice.</param>
+        /// <param name="ChtDistribution">Pie chart to show the risk data</param>
+
+        public void setDistributionCharts(DataTable dtDistribution, DataTable dttop10Locations, bool isOthersRequired, double OthersRiskValue, Chart ChtDistribution)
+        {
+            string DistributionSeries = "GraphDistribution";
+            //Set chart settings.
+            ChtDistribution.Series.Add(DistributionSeries);
+            ChtDistribution.ChartAreas.Add("ChartArea2");
+            ChtDistribution.ChartAreas[0].AxisX.IsStartedFromZero = true;
+            ChtDistribution.Series[DistributionSeries].ChartArea = "ChartArea2";
+            ChtDistribution.Series[DistributionSeries].ChartType = SeriesChartType.Pie;
+            ChtDistribution.Series[DistributionSeries].BorderWidth = 2;
+
+            //No of slices is 11 when others slice is needed.
+            int NoOfSlices = dtDistribution.Rows.Count > 10 ? 10 : dtDistribution.Rows.Count;
+
+
+            // Contains locations,that are in top 10, and their riskvalues 
+            DataTable dtTop10Distribution = dtDistribution.AsEnumerable().Where(X => dttop10Locations.AsEnumerable().Any(r => X["Location"].ToString() == r["Location"].ToString())).CopyToDataTable();
+
+            if (dtTop10Distribution.Rows.Count > 0)
+            {
+                foreach (DataRow dr in dtTop10Distribution.Rows)
+                {
+                    //Add points to the chart area.
+                    ChtDistribution.Series[0].Points.AddXY(dr["Location"].ToString(), dr["RiskValue"].ToString());
+                }
+            }
+
+            //show Others slice if required.
+            var objOthers = dtDistribution.AsEnumerable().Where(X => !dttop10Locations.AsEnumerable().Any(r => X["Location"].ToString() == r["Location"].ToString()));
+            DataTable dtOthers = new DataTable();
+            if (objOthers.Count() > 0)
+            {
+                dtOthers = objOthers.CopyToDataTable();
+            }
+
+            if (dtOthers.Rows.Count > 0)
+            {
+                foreach (DataRow dr in dtOthers.Rows)
+                {
+                    isOthersRequired = true;
+                    OthersRiskValue += Convert.ToInt64(dr["RiskValue"].ToString());
+                }
+            }
+
+            if (isOthersRequired)
+                ChtDistribution.Series[0].Points.AddXY("Others", OthersRiskValue);
+
+            OthersRiskValue = 0;
+            isOthersRequired = false;
+
+            //Set other chart settings.
+            ChtDistribution.ChartAreas[0].Area3DStyle.Enable3D = true;
+            ChtDistribution.Series[0].CustomProperties = "PieLabelStyle=Outside";
+            ChtDistribution.Legends[0].Enabled = true;
+            ChtDistribution.Series[0].ToolTip = "#VALX: #VALY{#,###}";
+            ChtDistribution.Legends[0].IsDockedInsideChartArea = false;
+            ChtDistribution.Legends[0].Docking = Docking.Bottom;
+            ChtDistribution.Series[0].LegendText = "#VALX #PERCENT{P1}";
+        }
+
+
+
+        /// <summary>
+        /// show History charts: Risk By Location and Risk By Alert.
+        /// </summary>
+        /// <param name="chStakedArea">Stacked area chart to represent Risk History.</param>
+        /// <param name="dtTotalRows">Contains total risk datat present in dattabase table dsrRiskHistory</param>
+        /// <param name="dtDistribution">this datatable contains present day risk data depending on the location or alert selected.</param>
+        /// <param name="dttop10Locations">Contains Risk data of top 10 Locations or alerts.</param>
+        /// <param name="isOthersRequired">Total risk value of the locations that fall in Others series.</param>
+        public void SetMultipleStackedAreaChart(Chart chStakedArea, DataTable dtTotalRows, DataTable dtDistribution, DataTable dttop10Locations, bool isOthersRequired)
+        {
+            string Date = string.Empty;
+            string seriesName = string.Empty;
+            double OthersRiskValue = 0;
+            int NoofTopLocations= 10;
+           
+            //History data - Group by date
+            List<DataTable> result = dtTotalRows.AsEnumerable().OrderBy(x => x.Field<DateTime>("Date"))
+            .GroupBy(row => row.Field<DateTime>("Date"))
+            .Select(g => g.CopyToDataTable())
+            .ToList();
+            chStakedArea.ChartAreas.Add("ChartArea1");
+
+            //Removes the gap between graph and Y axis.
+            chStakedArea.ChartAreas[0].AxisX.IsMarginVisible = false;
+
+            chStakedArea.ChartAreas[0].AxisX.Title = "Date";
+            chStakedArea.ChartAreas[0].AxisY.Title = "Risk";
+            //set x axis labels text angle.
+            chStakedArea.ChartAreas[0].AxisX.LabelStyle.Angle = -45;
+            chStakedArea.ChartAreas[0].AxisY.LabelStyle.Format = "{0:0,0}";
+           
+            // Set no of graphs to 11 if there are more than 10 data rows. Risk of all the rows greater than 10 should be added to gether and is assigned to Others
+            int NoofGraphs = dtDistribution.Rows.Count > 10 ? 11 : dtDistribution.Rows.Count;
+
+            //Create series.
+            for (int i = 0; i < NoofGraphs; i++)
+            {
+                if (i < 10)
+                {
+                    seriesName = dttop10Locations.Rows[i]["Location"].ToString();
+                }
+
+                else
+                    seriesName = "Others";
+
+                // Add series
+                chStakedArea.Series.Add(seriesName);
+
+                chStakedArea.Series[seriesName].ChartArea = "ChartArea1";
+                chStakedArea.Series[seriesName].ChartType = SeriesChartType.StackedArea;
+
+                chStakedArea.Series[seriesName].BorderWidth = 2;
+                chStakedArea.Series[seriesName].ToolTip = "Name: #SERIESNAME " + Environment.NewLine + "Date: #VALX " + Environment.NewLine + "Risk: #VALY{#,###}";
+
+            }
+
+            //Bind Risk by Alert History graph           
+            DataTable objTop10 = new DataTable();
+
+            //Loop through the dates.
+            foreach (DataTable dts in result)
+            {
+                //Get items that match with the top 10 items.
+                //Note: if present day has 8 locations. Then 8 series are created each will have the ID = Location name or Alert ID. So if a past date has an extra location then that location is not visible in the graph.
+                var obj = dts.AsEnumerable().Where(X => dttop10Locations.AsEnumerable().Any(r => X["Location"].ToString() == r["Location"].ToString()));
+                if (obj.Count() > 0)
+                    objTop10 = obj.CopyToDataTable();
+
+                if (objTop10.Rows.Count > 0)
+                {
+                    //Add XY points
+                    foreach (DataRow dr in objTop10.Rows)
+                    {
+                        chStakedArea.Series[dr["Location"].ToString()].Points.AddXY(Convert.ToDateTime(dr["Date"]).ToString("yyyy/MM/dd"), dr["RiskValue"]);
+                        Date = Convert.ToDateTime(dr["Date"]).ToString("yyyy/MM/dd");
+                    }
+
+                    // Add empty points if no location or alert is found for a particular date. An error occurrs if all the series don't have same no of points.
+                    foreach (DataRow dr in dttop10Locations.Rows)
+                    {
+                        if (!objTop10.AsEnumerable().Any(row => dr["Location"].ToString() == row.Field<String>("Location")))
+                        {
+                            chStakedArea.Series[dr["Location"].ToString()].Points.AddXY(Date, 0);
+                        }
+                    }
+
+                    objTop10.Clear();
+                }
+
+
+                // Get items that don't match with the top 10 items. These items will go under others.
+                var objOthers = dts.AsEnumerable().Where(X => !dttop10Locations.AsEnumerable().Any(r => r["Location"].ToString() == X["Location"].ToString()));
+                DataTable dtOthers = new DataTable();
+
+                // if present day has 8 locations. And a past date has an extra location. That location is not shown in graph.
+                //But during the "Get items that don't match with the top 10 items" check the extra location gets added to dtOthers. As an others series is not created
+                //an error would occurr. So inorder to handle this situation dttop10Locations.Rows.Count == 10 is added to the if condition.
+                if (objOthers.Count() > 0 && dttop10Locations.Rows.Count == NoofTopLocations)
+                {
+                    dtOthers = objOthers.CopyToDataTable();
+                }
+
+                if (dtOthers.Rows.Count > 0)
+                {
+                    isOthersRequired = true;
+                    Date = Convert.ToDateTime(dtOthers.Rows[0]["Date"]).ToString("yyyy/MM/dd");
+                    foreach (DataRow dr in dtOthers.Rows)
+                    {                                    
+                        OthersRiskValue += Convert.ToInt64(dr["RiskValue"]);
+                    }
+                }
+
+                //Add 'Others' point for a date.
+                if (isOthersRequired)
+                    chStakedArea.Series[10].Points.AddXY(Date, OthersRiskValue);
+                else if (NoofGraphs > 10)
+                {
+                    chStakedArea.Series[10].Points.AddXY(Date, OthersRiskValue);
+                }
+
+                OthersRiskValue = 0;
+                isOthersRequired = false;
+            }
+
+
+            //Set legend alignment
+            chStakedArea.Legends[0].IsDockedInsideChartArea = false;
+            chStakedArea.Legends[0].Docking = Docking.Bottom;
+
+            //Remove grid lines
+            chStakedArea.ChartAreas[0].AxisX.MajorGrid.Enabled = false;
+            chStakedArea.ChartAreas[0].AxisY.MajorGrid.Enabled = false;
+        }
+
+        /// <summary>
+        /// On any drop down selet index change.
+        /// </summary>
+        /// <param name="e">Contains Region,Country, and Site names.</param>
+        public void OnLocationChange(BindEventArgs e)
+        {
+            string LocationType = getLocationType(e.Region, e.Country, e.Site);
+            string location = GetLocation(e.Region, e.Country, e.Site);
+          
+            if (e.Region.Equals("Global"))
+            {
+                getAlertGraphs(dt, "Global", string.Empty, drpAlerts.SelectedValue);
+                populateGraph("Global", string.Empty, string.Empty);
+            }
+            else
+            {
+                getAlertGraphs(dt, string.IsNullOrEmpty(LocationType) ? "Global" : LocationType, location, drpAlerts.SelectedValue);
+                populateGraph(LocationType, location, string.Empty);
+            }
+
+            CommonFunctions.runjQueryCode(Page, String.Format("styleGrid('{0}');styleGrid('{1}');", grdRiskAlertTable.ClientID, grdLocationDistribution.ClientID));
+            updAlertsGraphs.Update();
+            updGraphs.Update();
+        }
+
+        protected void Location_LocationSelected(object sender, BindEventArgs e)
+        {
+            OnLocationChange(e);
+        }
+
+        /// <summary>
+        /// To show empty data message for a chart when no data is present
+        /// </summary>
+        /// <param name="chart">asp chart</param>
+        public void addAnnotation(Chart chart)
+        {
+            TextAnnotation annotation = new TextAnnotation();         
+            annotation.Text = "No Data";
+            annotation.X = 40;
+            annotation.Y = 5;
+            annotation.Font = new System.Drawing.Font("Arial", 16);
+            annotation.ForeColor = System.Drawing.Color.Red;
+
+            chart.Annotations.Add(annotation);
+        }
+       
+        /// <summary>
+        /// check if location is excluded
+        /// </summary>
+        /// <param name="Location">Location name</param>
+        /// <returns>true/false</returns>
+        public bool isExcludedLocations(string Location)
+        {
+            return !(Location.Contains("RemoteUsers") || Location.Contains("Vmware"));
+        }
+    }
+}
